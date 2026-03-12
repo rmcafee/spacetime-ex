@@ -340,6 +340,10 @@ defmodule SpacetimeDB.Connection do
     process_upgrade_responses(state, ref, Map.put(acc, :done, true), rest)
   end
 
+  defp process_upgrade_responses(state, ref, acc, [{:data, ref, data} | rest]) do
+    process_upgrade_responses(state, ref, Map.update(acc, :data, data, &(&1 <> data)), rest)
+  end
+
   defp process_upgrade_responses(state, ref, acc, [_ | rest]) do
     process_upgrade_responses(state, ref, acc, rest)
   end
@@ -350,6 +354,10 @@ defmodule SpacetimeDB.Connection do
         {:ok, %{state | conn: conn, websocket: websocket}}
 
       {:error, _conn, reason} ->
+        if acc[:data] do
+          Logger.warning("[SpacetimeDB] upgrade rejected (#{acc.status}): #{acc[:data]}")
+        end
+
         {:error, reason}
     end
   end
