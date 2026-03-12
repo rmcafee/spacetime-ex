@@ -101,34 +101,19 @@ defmodule SpacetimeDB.Protocol.BSATN do
 
   @doc "Decode a BSATN binary frame from the server into a typed struct."
   @spec decode(binary()) :: {:ok, term()} | {:error, term()}
-  def decode(<<tag::8, rest::binary>>) do
-    case decode_tag(tag, rest) do
-      {:ok, _} = ok ->
-        ok
-
-      {:error, reason} = err ->
-        require Logger
-
-        Logger.warning(
-          "[SpacetimeDB.Protocol.BSATN] decode failed: tag=#{tag}, payload_size=#{byte_size(rest)}, reason=#{inspect(reason)}, first_bytes=#{inspect(:binary.part(rest, 0, min(byte_size(rest), 64)), limit: :infinity)}"
-        )
-
-        err
-    end
-  end
-
+  def decode(<<tag::8, rest::binary>>), do: decode_tag(tag, rest)
   def decode(_), do: {:error, :empty_frame}
 
-  # tag 0: InitialConnection
-  # Identity is u256 (32 raw bytes), ConnectionId is u128 (16 raw bytes) — no length prefix.
-  # Token is Option<String> on the wire (0x00=None, 0x01=Some + string).
-  defp decode_tag(0, <<identity::binary-size(32), conn_id::binary-size(16), rest::binary>>) do
-    with {:ok, token, _rest} <- BSATN.decode_option(rest, &BSATN.decode_string/1) do
+  # tag 0: InitialConnection (IdentityToken)
+  # Identity is u256 (32 raw bytes), Address is u128 (16 raw bytes) — no length prefix.
+  # Token is a plain BSATN String (not Option-wrapped).
+  defp decode_tag(0, <<identity::binary-size(32), address::binary-size(16), rest::binary>>) do
+    with {:ok, token, _rest} <- BSATN.decode_string(rest) do
       {:ok,
        %Types.InitialConnection{
          identity: Base.encode16(identity, case: :lower),
-         connection_id: Base.encode16(conn_id, case: :lower),
-         token: token || ""
+         connection_id: Base.encode16(address, case: :lower),
+         token: token
        }}
     end
   end

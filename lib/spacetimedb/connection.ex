@@ -396,13 +396,19 @@ defmodule SpacetimeDB.Connection do
   end
 
   # BSATN protocol — binary frames
-  defp dispatch_frame(%{protocol: :bsatn} = state, {:binary, bin}) do
-    case ProtocolBSATN.decode(bin) do
+  # The server prepends a compression byte: 0=none, 1=brotli, 2=gzip.
+  defp dispatch_frame(%{protocol: :bsatn} = state, {:binary, <<0, rest::binary>>}) do
+    case ProtocolBSATN.decode(rest) do
       {:ok, msg} -> handle_server_message(state, msg)
       {:error, reason} ->
         Logger.warning("[SpacetimeDB] BSATN decode error: #{inspect(reason)}")
         state
     end
+  end
+
+  defp dispatch_frame(%{protocol: :bsatn} = state, {:binary, <<compression, _rest::binary>>}) do
+    Logger.warning("[SpacetimeDB] compressed frames not yet supported (compression=#{compression})")
+    state
   end
 
   defp dispatch_frame(state, {:close, _code, _reason}) do
