@@ -101,7 +101,22 @@ defmodule SpacetimeDB.Protocol.BSATN do
 
   @doc "Decode a BSATN binary frame from the server into a typed struct."
   @spec decode(binary()) :: {:ok, term()} | {:error, term()}
-  def decode(<<tag::8, rest::binary>>), do: decode_tag(tag, rest)
+  def decode(<<tag::8, rest::binary>>) do
+    case decode_tag(tag, rest) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, reason} = err ->
+        require Logger
+
+        Logger.warning(
+          "[SpacetimeDB.Protocol.BSATN] decode failed: tag=#{tag}, payload_size=#{byte_size(rest)}, reason=#{inspect(reason)}, first_bytes=#{inspect(:binary.part(rest, 0, min(byte_size(rest), 64)), limit: :infinity)}"
+        )
+
+        err
+    end
+  end
+
   def decode(_), do: {:error, :empty_frame}
 
   # tag 0: InitialConnection
