@@ -5,7 +5,7 @@ defmodule SpacetimeDB.Connection do
   ## Lifecycle
 
   1. `start_link/1` opens a TCP/TLS connection and performs the WebSocket upgrade
-     with the negotiated subprotocol (`v2.json.spacetimedb` or `v2.bsatn.spacetimedb`).
+     with the negotiated subprotocol.
   2. After the upgrade the server sends an `InitialConnection` frame.  The token is
      stored in state and the handler's `on_connected/2` callback is fired.
   3. The process drives the Mint connection inside its own receive loop
@@ -21,8 +21,12 @@ defmodule SpacetimeDB.Connection do
   It produces 3–5× smaller payloads.  Row data in `TableUpdate` structs arrives as
   raw BSATN binaries; decode them with `SpacetimeDB.BSATN.Schema`.
 
-  `:json` uses text WebSocket frames and the `v2.json.spacetimedb` subprotocol.
-  Row data arrives as decoded JSON terms (maps/lists).
+  `:json` uses text WebSocket frames and the `v1.json.spacetimedb` subprotocol by
+  default. Row data arrives as decoded JSON terms (maps/lists).
+
+  You can opt into v2 JSON (when the server supports it) with `protocol_version: 2`:
+
+      SpacetimeDB.start_link(protocol: :json, protocol_version: 2, ...)
 
   ## call_reducer and BSATN args
 
@@ -46,6 +50,7 @@ defmodule SpacetimeDB.Connection do
   | `:database` | `String.t()` | required | Database name or identity hex |
   | `:token` | `String.t() \| nil` | `nil` | Auth token (re-uses identity on reconnect) |
   | `:protocol` | `:bsatn \| :json` | `:bsatn` | Wire protocol |
+  | `:protocol_version` | `1 \| 2` | `1` | JSON protocol version (ignored for BSATN) |
   | `:handler` | `module \| {module, term} \| map` | required | Callback module |
   | `:reconnect` | `boolean()` | `true` | Auto-reconnect on disconnect |
   | `:reconnect_delay_ms` | `non_neg_integer()` | `500` | Initial reconnect delay |
@@ -59,6 +64,7 @@ defmodule SpacetimeDB.Connection do
 
   alias SpacetimeDB.{Protocol, Types}
   alias SpacetimeDB.Protocol.BSATN, as: ProtocolBSATN
+  alias SpacetimeDB.Protocol.JsonV1, as: ProtocolJsonV1
 
   @default_port 3000
   @default_protocol :bsatn
@@ -143,6 +149,7 @@ defmodule SpacetimeDB.Connection do
     database = Keyword.fetch!(opts, :database)
     token = Keyword.get(opts, :token)
     protocol = Keyword.get(opts, :protocol, @default_protocol)
+    protocol_version = Keyword.get(opts, :protocol_version, 1)
     handler = build_handler(Keyword.fetch!(opts, :handler))
     reconnect = Keyword.get(opts, :reconnect, true)
     reconnect_delay_ms = Keyword.get(opts, :reconnect_delay_ms, @default_reconnect_delay_ms)
@@ -157,6 +164,7 @@ defmodule SpacetimeDB.Connection do
       database: database,
       token: token,
       protocol: protocol,
+      protocol_version: protocol_version,
       handler: handler,
       reconnect: reconnect,
       reconnect_delay_ms: reconnect_delay_ms,
@@ -283,7 +291,7 @@ defmodule SpacetimeDB.Connection do
     path = "/v1/database/#{URI.encode(state.database)}/subscribe"
 
     headers =
-      [{"sec-websocket-protocol", subprotocol(state.protocol)}] ++
+      [{"sec-websocket-protocol", subprotocol(state.protocol, state.protocol_version)}] ++
         if state.token, do: [{"authorization", "Bearer #{state.token}"}], else: []
 
     ws_scheme = if state.tls, do: :wss, else: :ws
@@ -293,8 +301,14 @@ defmodule SpacetimeDB.Connection do
          {:ok, conn, ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, headers),
          state = %{state | conn: conn, ws_ref: ref, status: :connecting},
          {:ok, state} <- await_upgrade(state, ref) do
+      proto_label =
+        case state.protocol do
+          :json -> "json.v#{state.protocol_version}"
+          :bsatn -> "bsatn"
+        end
+
       Logger.info(
-        "[SpacetimeDB] connected (#{state.protocol}) to #{state.host}:#{state.port}/#{state.database}"
+        "[SpacetimeDB] connected (#{proto_label}) to #{state.host}:#{state.port}/#{state.database}"
       )
 
       {:ok,
@@ -387,7 +401,9 @@ defmodule SpacetimeDB.Connection do
 
   # JSON protocol — text frames
   defp dispatch_frame(%{protocol: :json} = state, {:text, json}) do
-    case Protocol.decode(json) do
+    decoder = json_module(state.protocol_version)
+
+    case decoder.decode(json) do
       {:ok, msg} -> handle_server_message(state, msg)
       {:error, reason} ->
         Logger.warning("[SpacetimeDB] JSON decode error: #{inspect(reason)}")
@@ -526,11 +542,16 @@ defmodule SpacetimeDB.Connection do
   # ---------------------------------------------------------------------------
 
   # Route an encode call to the right protocol module
-  defp enc(%{protocol: :json}, fun, args), do: apply(Protocol, fun, args)
+  defp enc(%{protocol: :json} = state, fun, args),
+    do: apply(json_module(state.protocol_version), fun, args)
+
   defp enc(%{protocol: :bsatn}, fun, args), do: apply(ProtocolBSATN, fun, args)
 
-  defp subprotocol(:json), do: Protocol.subprotocol()
-  defp subprotocol(:bsatn), do: ProtocolBSATN.subprotocol()
+  defp json_module(1), do: ProtocolJsonV1
+  defp json_module(2), do: Protocol
+
+  defp subprotocol(:json, version), do: json_module(version).subprotocol()
+  defp subprotocol(:bsatn, _version), do: ProtocolBSATN.subprotocol()
 
   # When a `:uri` option is provided, parse it into `:host`, `:port`, and `:tls`
   # so users can pass `uri: "https://maincloud.spacetimedb.com"` like the official SDKs.

@@ -1,6 +1,6 @@
 defmodule SpacetimeDB do
   @moduledoc ~S"""
-  Elixir client for [SpacetimeDB](https://spacetimedb.com) v2.
+  Elixir client for [SpacetimeDB](https://spacetimedb.com).
 
   ## Quick start
 
@@ -8,10 +8,10 @@ defmodule SpacetimeDB do
         host: "localhost",
         database: "my_module",
         handler: %{
-          on_connected: fn conn_info, _ ->
+          on_connected: fn conn_info ->
             IO.puts("Connected as #{conn_info.identity}")
           end,
-          on_transaction_update: fn update, _ ->
+          on_transaction_update: fn update ->
             IO.inspect(update.query_sets, label: "query sets changed")
           end
         }
@@ -74,7 +74,28 @@ defmodule SpacetimeDB do
         end
       end
 
+  ## JSON protocol
+
   Pass `protocol: :json` to use text frames and plain decoded JSON maps instead.
+  This uses `v1.json.spacetimedb` by default:
+
+      {:ok, conn} = SpacetimeDB.start_link(
+        host: "localhost",
+        database: "my_module",
+        protocol: :json,
+        handler: %{
+          on_connected: fn info -> IO.puts("Connected as #{info.identity}") end,
+          on_subscribe_applied: fn msg ->
+            for table <- msg.tables do
+              IO.puts("#{table.table_name}: #{length(table.inserts)} rows")
+            end
+          end
+        }
+      )
+
+  To opt into v2 JSON (when server support is available):
+
+      SpacetimeDB.start_link(protocol: :json, protocol_version: 2, ...)
 
   ## Options
 
