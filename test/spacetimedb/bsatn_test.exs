@@ -90,6 +90,31 @@ defmodule SpacetimeDB.BSATNTest do
     end
   end
 
+  describe "u256" do
+    test "round-trips zero" do
+      roundtrip(:u256, 0)
+    end
+
+    test "round-trips max value" do
+      max_u256 = Bitwise.bsl(1, 256) - 1
+      roundtrip(:u256, max_u256)
+    end
+
+    test "encodes to exactly 32 bytes" do
+      assert byte_size(BSATN.encode_u256(0)) == 32
+      assert byte_size(BSATN.encode_u256(1)) == 32
+    end
+
+    test "little-endian encoding" do
+      <<first_byte, _::binary>> = BSATN.encode_u256(1)
+      assert first_byte == 1
+    end
+
+    test "not enough bytes" do
+      assert {:error, :not_enough_bytes} = BSATN.decode_u256(<<0::size(248)>>)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Signed integers
   # ---------------------------------------------------------------------------

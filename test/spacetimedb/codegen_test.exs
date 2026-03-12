@@ -286,6 +286,239 @@ defmodule SpacetimeDB.CodeGenTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Product / Sum type resolution
+  # ---------------------------------------------------------------------------
+
+  describe "generate_modules/2 — Product/Sum type resolution" do
+    test "Identity Product type maps to :u256" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            %{"Product" => %{"elements" => [
+              %{"name" => "id", "algebraic_type" => "U32"},
+              %{"name" => "owner", "algebraic_type" => %{"Ref" => 1}}
+            ]}},
+            %{"Product" => %{"elements" => [
+              %{"name" => "__identity__", "algebraic_type" => %{"U256" => %{}}}
+            ]}}
+          ]
+        },
+        "tables" => [%{"name" => "Owned", "product_type_ref" => 0, "primary_key" => [0]}]
+      }
+
+      [{_file, src}] = CodeGen.generate_modules(schema, namespace: "T")
+      assert src =~ "field :owner, :u256"
+    end
+
+    test "ConnectionId Product type maps to :u128" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            %{"Product" => %{"elements" => [
+              %{"name" => "id", "algebraic_type" => "U32"},
+              %{"name" => "conn", "algebraic_type" => %{"Ref" => 1}}
+            ]}},
+            %{"Product" => %{"elements" => [
+              %{"name" => "__connection_id__", "algebraic_type" => %{"U128" => %{}}}
+            ]}}
+          ]
+        },
+        "tables" => [%{"name" => "Session", "product_type_ref" => 0, "primary_key" => [0]}]
+      }
+
+      [{_file, src}] = CodeGen.generate_modules(schema, namespace: "T")
+      assert src =~ "field :conn, :u128"
+    end
+
+    test "single-field Product (Timestamp wrapping U64) inlines to :u64" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            %{"Product" => %{"elements" => [
+              %{"name" => "id", "algebraic_type" => "U32"},
+              %{"name" => "sent", "algebraic_type" => %{"Ref" => 1}}
+            ]}},
+            %{"Product" => %{"elements" => [
+              %{"name" => "microseconds", "algebraic_type" => %{"U64" => %{}}}
+            ]}}
+          ]
+        },
+        "tables" => [%{"name" => "Event", "product_type_ref" => 0, "primary_key" => [0]}]
+      }
+
+      [{_file, src}] = CodeGen.generate_modules(schema, namespace: "T")
+      assert src =~ "field :sent, :u64"
+    end
+
+    test "Option<String> Sum type maps to {:option, :string}" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            %{"Product" => %{"elements" => [
+              %{"name" => "id", "algebraic_type" => "U32"},
+              %{"name" => "nickname", "algebraic_type" => %{"Ref" => 1}}
+            ]}},
+            %{"Sum" => %{"variants" => [
+              %{"algebraic_type" => %{"Product" => %{"elements" => []}}},
+              %{"algebraic_type" => %{"Product" => %{"elements" => [
+                %{"algebraic_type" => "String"}
+              ]}}}
+            ]}}
+          ]
+        },
+        "tables" => [%{"name" => "Profile", "product_type_ref" => 0, "primary_key" => [0]}]
+      }
+
+      [{_file, src}] = CodeGen.generate_modules(schema, namespace: "T")
+      assert src =~ "field :nickname, {:option, :string}"
+    end
+
+    test "non-Option Sum type still maps to :u8" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            %{"Product" => %{"elements" => [
+              %{"name" => "id", "algebraic_type" => "U32"},
+              %{"name" => "status", "algebraic_type" => %{"Ref" => 1}}
+            ]}},
+            %{"Sum" => %{"variants" => [
+              %{"algebraic_type" => %{"Product" => %{"elements" => [
+                %{"name" => "x", "algebraic_type" => "U32"}
+              ]}}},
+              %{"algebraic_type" => %{"Product" => %{"elements" => [
+                %{"name" => "y", "algebraic_type" => "String"}
+              ]}}}
+            ]}}
+          ]
+        },
+        "tables" => [%{"name" => "Thing", "product_type_ref" => 0, "primary_key" => [0]}]
+      }
+
+      [{_file, src}] = CodeGen.generate_modules(schema, namespace: "T")
+      assert src =~ "field :status, :u8"
+    end
+
+    test "quickstart-chat schema generates correct types" do
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            # 0: User
+            %{"Product" => %{"elements" => [
+              %{"name" => "identity", "algebraic_type" => %{"Ref" => 2}},
+              %{"name" => "name", "algebraic_type" => %{"Ref" => 3}},
+              %{"name" => "online", "algebraic_type" => "Bool"}
+            ]}},
+            # 1: Message
+            %{"Product" => %{"elements" => [
+              %{"name" => "sender", "algebraic_type" => %{"Ref" => 2}},
+              %{"name" => "sent", "algebraic_type" => %{"Ref" => 4}},
+              %{"name" => "text", "algebraic_type" => "String"}
+            ]}},
+            # 2: Identity
+            %{"Product" => %{"elements" => [
+              %{"name" => "__identity__", "algebraic_type" => %{"U256" => %{}}}
+            ]}},
+            # 3: Option<String>
+            %{"Sum" => %{"variants" => [
+              %{"algebraic_type" => %{"Product" => %{"elements" => []}}},
+              %{"algebraic_type" => %{"Product" => %{"elements" => [
+                %{"algebraic_type" => "String"}
+              ]}}}
+            ]}},
+            # 4: Timestamp
+            %{"Product" => %{"elements" => [
+              %{"name" => "microseconds", "algebraic_type" => %{"U64" => %{}}}
+            ]}}
+          ]
+        },
+        "tables" => [
+          %{"name" => "User", "product_type_ref" => 0, "primary_key" => [0]},
+          %{"name" => "Message", "product_type_ref" => 1, "primary_key" => [0]}
+        ]
+      }
+
+      modules = CodeGen.generate_modules(schema, namespace: "Chat")
+      user_src = modules |> Enum.find(fn {f, _} -> f == "user.ex" end) |> elem(1)
+      msg_src = modules |> Enum.find(fn {f, _} -> f == "message.ex" end) |> elem(1)
+
+      assert user_src =~ "field :identity, :u256"
+      assert user_src =~ "field :name, {:option, :string}"
+      assert user_src =~ "field :online, :bool"
+
+      assert msg_src =~ "field :sender, :u256"
+      assert msg_src =~ "field :sent, :u64"
+      assert msg_src =~ "field :text, :string"
+    end
+  end
+
+  describe "generate_modules/2 — real server schema (version=9 format)" do
+    test "quickstart-chat with Option-wrapped names, inline Products, some-first Options" do
+      # This matches the actual JSON returned by SpacetimeDB ?version=9
+      schema = %{
+        "typespace" => %{
+          "types" => [
+            # 0: Message — inline Product types, Option-wrapped names
+            %{"Product" => %{"elements" => [
+              %{
+                "name" => %{"some" => "sender"},
+                "algebraic_type" => %{"Product" => %{"elements" => [
+                  %{"name" => %{"some" => "__identity__"}, "algebraic_type" => %{"U256" => []}}
+                ]}}
+              },
+              %{
+                "name" => %{"some" => "sent"},
+                "algebraic_type" => %{"Product" => %{"elements" => [
+                  %{"name" => %{"some" => "__timestamp_micros_since_unix_epoch__"}, "algebraic_type" => %{"I64" => []}}
+                ]}}
+              },
+              %{
+                "name" => %{"some" => "text"},
+                "algebraic_type" => %{"String" => []}
+              }
+            ]}},
+            # 1: User — Option<String> with some-first ordering
+            %{"Product" => %{"elements" => [
+              %{
+                "name" => %{"some" => "identity"},
+                "algebraic_type" => %{"Product" => %{"elements" => [
+                  %{"name" => %{"some" => "__identity__"}, "algebraic_type" => %{"U256" => []}}
+                ]}}
+              },
+              %{
+                "name" => %{"some" => "name"},
+                "algebraic_type" => %{"Sum" => %{"variants" => [
+                  %{"name" => %{"some" => "some"}, "algebraic_type" => %{"String" => []}},
+                  %{"name" => %{"some" => "none"}, "algebraic_type" => %{"Product" => %{"elements" => []}}}
+                ]}}
+              },
+              %{
+                "name" => %{"some" => "online"},
+                "algebraic_type" => %{"Bool" => []}
+              }
+            ]}}
+          ]
+        },
+        "tables" => [
+          %{"name" => "message", "product_type_ref" => 0, "primary_key" => []},
+          %{"name" => "user", "product_type_ref" => 1, "primary_key" => [0]}
+        ]
+      }
+
+      modules = CodeGen.generate_modules(schema, namespace: "QuickstartChat")
+      msg_src = modules |> Enum.find(fn {f, _} -> f == "message.ex" end) |> elem(1)
+      user_src = modules |> Enum.find(fn {f, _} -> f == "user.ex" end) |> elem(1)
+
+      assert msg_src =~ "field :sender, :u256"
+      assert msg_src =~ "field :sent, :i64"
+      assert msg_src =~ "field :text, :string"
+
+      assert user_src =~ "field :identity, :u256"
+      assert user_src =~ "field :name, {:option, :string}"
+      assert user_src =~ "field :online, :bool"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # write_files/2
   # ---------------------------------------------------------------------------
 

@@ -79,6 +79,7 @@ defmodule SpacetimeDB.CodeGen do
   | `:port` | `3000` | Port (443 when TLS detected from URI) |
   | `:tls` | `false` | Use TLS |
   | `:token` | `nil` | Auth token |
+  | `:version` | `9` | Schema format version (`?version=` query param) |
   | `:namespace` | `"SpacetimeDB"` | Elixir module namespace prefix |
   | `:out` | `"lib/spacetimedb/"` | Output directory |
   """
@@ -93,7 +94,9 @@ defmodule SpacetimeDB.CodeGen do
     namespace = Keyword.get(opts, :namespace, "SpacetimeDB")
     out = Keyword.get(opts, :out, "lib/spacetimedb/")
 
-    with {:ok, schema} <- fetch_schema(host, database, port: port, tls: tls, token: token),
+    version = Keyword.get(opts, :version, 9)
+
+    with {:ok, schema} <- fetch_schema(host, database, port: port, tls: tls, token: token, version: version),
          modules = generate_modules(schema, namespace: namespace),
          :ok <- write_files(modules, out) do
       :ok
@@ -108,7 +111,8 @@ defmodule SpacetimeDB.CodeGen do
     tls = Keyword.get(opts, :tls, false)
     token = Keyword.get(opts, :token)
     scheme = if tls, do: :https, else: :http
-    path = "/v1/database/#{URI.encode(database)}/schema"
+    version = Keyword.get(opts, :version, 9)
+    path = "/v1/database/#{URI.encode(database)}/schema?version=#{version}"
     headers = if token, do: [{"authorization", "Bearer #{token}"}], else: []
 
     with {:ok, body} <- http_get(scheme, host, port, path, headers) do
@@ -187,13 +191,13 @@ defmodule SpacetimeDB.CodeGen do
         idx = table["product_type_ref"]
         type = Enum.at(typespace, idx)
         elements = get_in(type, ["Product", "elements"]) || []
-        Enum.map(elements, &{&1["name"], map_algebraic_type(&1["algebraic_type"], typespace)})
+        Enum.map(elements, &{unwrap_name(&1["name"]), map_algebraic_type(&1["algebraic_type"], typespace)})
 
       # Older: inline "schema" with "columns"
       is_map(table["schema"]) ->
         cols = table["schema"]["columns"] || table["schema"]["elements"] || []
         Enum.map(cols, fn c ->
-          name = c["name"] || c["col_name"]
+          name = unwrap_name(c["name"] || c["col_name"])
           type = map_algebraic_type(c["col_type"] || c["algebraic_type"], typespace)
           {name, type}
         end)
@@ -236,6 +240,7 @@ defmodule SpacetimeDB.CodeGen do
   defp map_algebraic_type("U32", _ts), do: :u32
   defp map_algebraic_type("U64", _ts), do: :u64
   defp map_algebraic_type("U128", _ts), do: :u128
+  defp map_algebraic_type("U256", _ts), do: :u256
   defp map_algebraic_type("I8", _ts), do: :i8
   defp map_algebraic_type("I16", _ts), do: :i16
   defp map_algebraic_type("I32", _ts), do: :i32
@@ -253,6 +258,7 @@ defmodule SpacetimeDB.CodeGen do
   defp map_algebraic_type(%{"U32" => _}, _ts), do: :u32
   defp map_algebraic_type(%{"U64" => _}, _ts), do: :u64
   defp map_algebraic_type(%{"U128" => _}, _ts), do: :u128
+  defp map_algebraic_type(%{"U256" => _}, _ts), do: :u256
   defp map_algebraic_type(%{"I8" => _}, _ts), do: :i8
   defp map_algebraic_type(%{"I16" => _}, _ts), do: :i16
   defp map_algebraic_type(%{"I32" => _}, _ts), do: :i32
@@ -292,16 +298,76 @@ defmodule SpacetimeDB.CodeGen do
   defp map_algebraic_type(%{"AlgebraicTypeRef" => idx}, ts),
     do: map_algebraic_type(%{"Ref" => idx}, ts)
 
-  # Product type inline — flatten to :bytes (nested structs need their own module)
+  # Product type — detect known single-field wrappers (Identity, ConnectionId, Timestamp, etc.)
+  defp map_algebraic_type(%{"Product" => %{"elements" => [single]}}, ts) do
+    name = unwrap_name(single["name"])
+
+    case name do
+      "__identity__" -> :u256
+      "__connection_id__" -> :u128
+      "__timestamp_micros_since_unix_epoch__" -> :i64
+      _ ->
+        case map_algebraic_type(single["algebraic_type"], ts) do
+          :bytes -> :bytes
+          primitive -> primitive
+        end
+    end
+  end
+
   defp map_algebraic_type(%{"Product" => _}, _ts), do: :bytes
 
-  # Sum type inline — flatten to :u8 discriminant
+  # Sum type — detect Option pattern (2 variants: None=empty product, Some=single-element product)
+  defp map_algebraic_type(%{"Sum" => %{"variants" => variants}}, ts) do
+    case detect_option_type(variants, ts) do
+      {:option, _} = opt -> opt
+      nil -> :u8
+    end
+  end
+
   defp map_algebraic_type(%{"Sum" => _}, _ts), do: :u8
 
   defp map_algebraic_type(unknown, _ts) do
     Logger.warning("[SpacetimeDB.CodeGen] unknown algebraic type: #{inspect(unknown)}, using :bytes")
     :bytes
   end
+
+  # Detect if a Sum type's variants represent Option<T>.
+  # Handles both orderings: (None, Some) and (Some, None).
+  # Some variant may have the inner type directly or wrapped in a single-element Product.
+  defp detect_option_type([v0, v1], ts) do
+    cond do
+      none_variant?(v0) -> extract_some_type(v1, ts)
+      none_variant?(v1) -> extract_some_type(v0, ts)
+      true -> nil
+    end
+  end
+
+  defp detect_option_type(_variants, _ts), do: nil
+
+  defp none_variant?(%{"name" => name}) when is_map(name), do: unwrap_name(name) == "none"
+  defp none_variant?(%{"algebraic_type" => %{"Product" => %{"elements" => []}}}), do: true
+
+  defp none_variant?(%{"algebraic_type" => %{"Product" => prod}})
+       when not is_map_key(prod, "elements"),
+       do: true
+
+  defp none_variant?(_), do: false
+
+  # Some variant: inner type is directly on the variant (not wrapped in Product)
+  defp extract_some_type(%{"algebraic_type" => %{"Product" => %{"elements" => [%{"algebraic_type" => t}]}}}, ts) do
+    {:option, map_algebraic_type(t, ts)}
+  end
+
+  defp extract_some_type(%{"algebraic_type" => inner}, ts) when is_map(inner) do
+    # Check it's not a None-style empty product
+    case inner do
+      %{"Product" => %{"elements" => []}} -> nil
+      %{"Product" => prod} when not is_map_key(prod, "elements") -> nil
+      _ -> {:option, map_algebraic_type(inner, ts)}
+    end
+  end
+
+  defp extract_some_type(_, _), do: nil
 
   # ---------------------------------------------------------------------------
   # Private — source rendering
@@ -346,6 +412,11 @@ defmodule SpacetimeDB.CodeGen do
   # ---------------------------------------------------------------------------
   # Private — naming helpers
   # ---------------------------------------------------------------------------
+
+  # Unwrap Option-encoded names: {"some": "x"} → "x", plain string → as-is
+  defp unwrap_name(%{"some" => name}), do: name
+  defp unwrap_name(name) when is_binary(name), do: name
+  defp unwrap_name(_), do: nil
 
   defp pascal_case(str) do
     str

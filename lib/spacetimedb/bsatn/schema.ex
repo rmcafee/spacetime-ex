@@ -26,7 +26,7 @@ defmodule SpacetimeDB.BSATN.Schema do
 
   ## Supported field types
 
-  All BSATN primitive atoms (`:u8`, `:u16`, `:u32`, `:u64`, `:u128`,
+  All BSATN primitive atoms (`:u8`, `:u16`, `:u32`, `:u64`, `:u128`, `:u256`,
   `:i8`, `:i16`, `:i32`, `:i64`, `:i128`, `:f32`, `:f64`, `:bool`,
   `:string`, `:bytes`) plus compound forms:
 

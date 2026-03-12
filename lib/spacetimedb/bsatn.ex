@@ -16,6 +16,7 @@ defmodule SpacetimeDB.BSATN do
   | `u32` / `i32` | 4 |
   | `u64` / `i64` | 8 |
   | `u128` / `i128` | 16 |
+  | `u256`           | 32 |
   | `f32` | 4 (IEEE 754 LE) |
   | `f64` | 8 (IEEE 754 LE) |
   | `string` | 4-byte LE length + UTF-8 bytes |
@@ -57,6 +58,10 @@ defmodule SpacetimeDB.BSATN do
   @doc "Encode an unsigned 128-bit integer (little-endian)."
   @spec encode_u128(non_neg_integer()) :: binary()
   def encode_u128(n), do: <<n::little-unsigned-128>>
+
+  @doc "Encode an unsigned 256-bit integer (little-endian)."
+  @spec encode_u256(non_neg_integer()) :: binary()
+  def encode_u256(n), do: <<n::little-unsigned-256>>
 
   @doc "Encode a signed 8-bit integer."
   @spec encode_i8(integer()) :: binary()
@@ -145,6 +150,11 @@ defmodule SpacetimeDB.BSATN do
   @spec decode_u128(binary()) :: {:ok, non_neg_integer(), binary()} | {:error, term()}
   def decode_u128(<<n::little-unsigned-128, rest::binary>>), do: {:ok, n, rest}
   def decode_u128(_), do: {:error, :not_enough_bytes}
+
+  @doc "Decode an unsigned 256-bit integer (little-endian)."
+  @spec decode_u256(binary()) :: {:ok, non_neg_integer(), binary()} | {:error, term()}
+  def decode_u256(<<n::little-unsigned-256, rest::binary>>), do: {:ok, n, rest}
+  def decode_u256(_), do: {:error, :not_enough_bytes}
 
   @doc "Decode a signed 8-bit integer."
   @spec decode_i8(binary()) :: {:ok, integer(), binary()} | {:error, term()}
@@ -241,7 +251,7 @@ defmodule SpacetimeDB.BSATN do
   @doc """
   Decode a single value by type atom.  Useful when building generic decoders.
 
-  Supported atoms: `:bool`, `:u8`, `:u16`, `:u32`, `:u64`, `:u128`,
+  Supported atoms: `:bool`, `:u8`, `:u16`, `:u32`, `:u64`, `:u128`, `:u256`,
   `:i8`, `:i16`, `:i32`, `:i64`, `:i128`, `:f32`, `:f64`, `:string`, `:bytes`.
   """
   @spec decode(atom(), binary()) :: {:ok, term(), binary()} | {:error, term()}
@@ -251,6 +261,7 @@ defmodule SpacetimeDB.BSATN do
   def decode(:u32, bin), do: decode_u32(bin)
   def decode(:u64, bin), do: decode_u64(bin)
   def decode(:u128, bin), do: decode_u128(bin)
+  def decode(:u256, bin), do: decode_u256(bin)
   def decode(:i8, bin), do: decode_i8(bin)
   def decode(:i16, bin), do: decode_i16(bin)
   def decode(:i32, bin), do: decode_i32(bin)
@@ -279,6 +290,7 @@ defmodule SpacetimeDB.BSATN do
   def encode(:u32, v), do: encode_u32(v)
   def encode(:u64, v), do: encode_u64(v)
   def encode(:u128, v), do: encode_u128(v)
+  def encode(:u256, v), do: encode_u256(v)
   def encode(:i8, v), do: encode_i8(v)
   def encode(:i16, v), do: encode_i16(v)
   def encode(:i32, v), do: encode_i32(v)
