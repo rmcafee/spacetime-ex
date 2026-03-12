@@ -1,5 +1,7 @@
 # SpacetimeDB — Elixir Client
 
+*Fork of https://github.com/maco144/spacetime-ex : temp until it gets updated*
+
 An Elixir client for [SpacetimeDB](https://spacetimedb.com) v2 — WebSocket
 subscriptions, reducer and procedure calls, BSATN binary protocol, live ETS
 table mirrors, and a code generator that builds schema modules from a live
