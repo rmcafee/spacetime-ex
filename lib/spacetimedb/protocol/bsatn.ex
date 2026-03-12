@@ -106,13 +106,14 @@ defmodule SpacetimeDB.Protocol.BSATN do
 
   # tag 0: InitialConnection
   # Identity is u256 (32 raw bytes), ConnectionId is u128 (16 raw bytes) — no length prefix.
+  # Token is Option<String> on the wire (0x00=None, 0x01=Some + string).
   defp decode_tag(0, <<identity::binary-size(32), conn_id::binary-size(16), rest::binary>>) do
-    with {:ok, token, _rest} <- BSATN.decode_string(rest) do
+    with {:ok, token, _rest} <- BSATN.decode_option(rest, &BSATN.decode_string/1) do
       {:ok,
        %Types.InitialConnection{
          identity: Base.encode16(identity, case: :lower),
          connection_id: Base.encode16(conn_id, case: :lower),
-         token: token
+         token: token || ""
        }}
     end
   end
