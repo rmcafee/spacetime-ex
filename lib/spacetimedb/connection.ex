@@ -286,9 +286,11 @@ defmodule SpacetimeDB.Connection do
       [{"sec-websocket-protocol", subprotocol(state.protocol)}] ++
         if state.token, do: [{"authorization", "Bearer #{state.token}"}], else: []
 
+    ws_scheme = if state.tls, do: :wss, else: :ws
+
     with {:ok, conn} <-
            Mint.HTTP.connect(scheme, state.host, state.port, protocols: [:http1]),
-         {:ok, conn, ref} <- Mint.WebSocket.upgrade(:ws, conn, path, headers),
+         {:ok, conn, ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, headers),
          state = %{state | conn: conn, ws_ref: ref, status: :connecting},
          {:ok, state} <- await_upgrade(state, ref) do
       Logger.info(
@@ -300,34 +302,56 @@ defmodule SpacetimeDB.Connection do
     end
   end
 
-  defp await_upgrade(state, ref) do
+  defp await_upgrade(state, ref, acc \\ %{}) do
     receive do
       message ->
         case Mint.WebSocket.stream(state.conn, message) do
           {:ok, conn, responses} ->
-            case find_upgrade(responses, ref) do
-              {:ok, websocket} -> {:ok, %{state | conn: conn, websocket: websocket}}
-              :pending -> await_upgrade(%{state | conn: conn}, ref)
-              {:error, reason} -> {:error, reason}
-            end
+            process_upgrade_responses(%{state | conn: conn}, ref, acc, responses)
 
           {:error, _conn, reason, _} ->
             {:error, reason}
 
           :unknown ->
-            await_upgrade(state, ref)
+            await_upgrade(state, ref, acc)
         end
     after
       10_000 -> {:error, :upgrade_timeout}
     end
   end
 
-  defp find_upgrade(responses, ref) do
-    Enum.reduce_while(responses, :pending, fn
-      {:upgrade, ^ref, {:ok, websocket}}, _ -> {:halt, {:ok, websocket}}
-      {:upgrade, ^ref, {:error, reason}}, _ -> {:halt, {:error, reason}}
-      _, acc -> {:cont, acc}
-    end)
+  defp process_upgrade_responses(state, ref, acc, []) do
+    if Map.has_key?(acc, :done) do
+      finalize_upgrade(state, ref, acc)
+    else
+      await_upgrade(state, ref, acc)
+    end
+  end
+
+  defp process_upgrade_responses(state, ref, acc, [{:status, ref, status} | rest]) do
+    process_upgrade_responses(state, ref, Map.put(acc, :status, status), rest)
+  end
+
+  defp process_upgrade_responses(state, ref, acc, [{:headers, ref, headers} | rest]) do
+    process_upgrade_responses(state, ref, Map.put(acc, :headers, headers), rest)
+  end
+
+  defp process_upgrade_responses(state, ref, acc, [{:done, ref} | rest]) do
+    process_upgrade_responses(state, ref, Map.put(acc, :done, true), rest)
+  end
+
+  defp process_upgrade_responses(state, ref, acc, [_ | rest]) do
+    process_upgrade_responses(state, ref, acc, rest)
+  end
+
+  defp finalize_upgrade(state, ref, acc) do
+    case Mint.WebSocket.new(state.conn, ref, acc.status, acc[:headers] || []) do
+      {:ok, conn, websocket} ->
+        {:ok, %{state | conn: conn, websocket: websocket}}
+
+      {:error, _conn, reason} ->
+        {:error, reason}
+    end
   end
 
   # ---------------------------------------------------------------------------
