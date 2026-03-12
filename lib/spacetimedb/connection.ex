@@ -392,7 +392,8 @@ defmodule SpacetimeDB.Connection do
     case ProtocolBSATN.decode(bin) do
       {:ok, msg} -> handle_server_message(state, msg)
       {:error, reason} ->
-        Logger.warning("[SpacetimeDB] BSATN decode error: #{inspect(reason)}")
+        tag = if byte_size(bin) > 0, do: :binary.at(bin, 0), else: :empty
+        Logger.warning("[SpacetimeDB] BSATN decode error: #{inspect(reason)}, tag=#{tag}, #{byte_size(bin)} bytes")
         state
     end
   end
