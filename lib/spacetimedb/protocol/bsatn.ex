@@ -105,10 +105,9 @@ defmodule SpacetimeDB.Protocol.BSATN do
   def decode(_), do: {:error, :empty_frame}
 
   # tag 0: InitialConnection
-  defp decode_tag(0, bin) do
-    with {:ok, identity, bin} <- BSATN.decode_bytes(bin),
-         {:ok, conn_id, bin} <- BSATN.decode_bytes(bin),
-         {:ok, token, _rest} <- BSATN.decode_string(bin) do
+  # Identity is u256 (32 raw bytes), ConnectionId is u128 (16 raw bytes) — no length prefix.
+  defp decode_tag(0, <<identity::binary-size(32), conn_id::binary-size(16), rest::binary>>) do
+    with {:ok, token, _rest} <- BSATN.decode_string(rest) do
       {:ok,
        %Types.InitialConnection{
          identity: Base.encode16(identity, case: :lower),
@@ -117,6 +116,8 @@ defmodule SpacetimeDB.Protocol.BSATN do
        }}
     end
   end
+
+  defp decode_tag(0, _bin), do: {:error, :not_enough_bytes}
 
   # tag 1: SubscribeApplied
   defp decode_tag(1, bin) do
